@@ -637,6 +637,96 @@ PS4["14.00"] = Object.assign({}, PS4["13.52"], {
   k_rootvnode: undefined,
 });
 
+/* 14.02. The WebKit half is 14.00's, and that is measured rather than assumed:
+   a 14.02 console ran it and reached the kernel pointer leak, which is the only
+   way the anchor below could be read at all.
+
+   The kernel half used to be afterglow's alone. On 2026-11-12 the decrypted
+   14.02 image (1402k.elf, link base 0xffffffff82200000) was walked at every
+   site below, and the console's own post-run image (kernel_1402.bin, same
+   build slid to 0xffffffff96810000) agrees byte for byte wherever it kept
+   text: the anchor prologue at 0xe6c30, the single 4e 95 c3 at 0xa81478, every
+   patch row, the five bootstrap writes at 0x490/0x4b5/0x4b9/0x4c2/0xab4 and
+   the two at 0x1faeda/0x1faedd. The dump is cumulative, so it also carries the
+   14.00-side writes (0x1faada, 0x0628f6f); the 14.02 sites are the ones whose
+   clean byte is the 0x75 the patch expects (0x062926f) and the pair the
+   0xe6c30 branch of the bootstrap stub targets (0x1faeda/0x1faedd).
+   prison0/rootvnode/sysent are data slots, zero in both images, so they rest
+   on the arithmetic every table since 11.50 keeps: sysent 0x1102b70, entry
+   stride 0x30, so [11] = 0x1102d80 (nargs 2, handler 0xffffffff823c07a0) and
+   [661] = 0x110a760 (nargs 4, handler 0xffffffff8231f6c0) in the clean image.
+
+   What stayed unmeasured -- k_idt_rsvd, k_evf_cv, k_jmp_rsi,
+   k_sysctl_handle_int, k_oid_*, k_arg1_* -- is left undefined exactly as
+   14.00 set it, instead of being filled with plausible numbers nothing checks.
+
+   k_kl_lock was the first field this file could state independently: the leak
+   handed back 0xc8aa6c30, whose page offset 0x2c30 is 0x30 below 14.00's
+   0xe6c60, and that base only lands on the 16 KiB grid at 0xe6c30. */
+PS4["14.02"] = Object.assign({}, PS4["14.00"], {
+  alias_of: "14.00-webkit",
+  fw_status:
+    "state=14.02 " +
+    "webkit=14.00-identical (ran on hardware, reached the leak) " +
+    "kernel=measured-vs-1402k.elf (anchor, swap_rbp, sysent rows; post-run " +
+    "image agrees on text) " +
+    "payload=hen.bin|goldhen.bin",
+  k_kl_lock: 0xe6c30,
+  k_prison0: 0x111fa18,
+  k_rootvnode: 0x2136e90,
+  k_sysent: 0x1102b70,
+  k_sysent_661: 0x110a760,
+});
+
+/* The full measured 14.02 set, in one place: kernel RVAs plus the sites the
+   afterglow stage writes. Everything is relative to the leaked kbase (which
+   comes off LSTAR - xfast_syscall, not off link_base; link_base only documents
+   the image the RVAs were read from). Patch rows carry the bytes to write:
+   "eb"/"eb04" replace conditional jumps, "90e9" a call, "eb00" a check. */
+const KERNEL_1402 = Object.freeze({
+  anchor: 0x000e6c30,        // 55 48 89 e5 ... -- leak voter, page offset 0x2c30
+  swap_rbp: 0x00a81478,      // 4e 95 c3 -- xchg rbp,rax ; ret, one match in text
+  prison0: 0x0111fa18,       // qword slot, init fills it with the prison pointer
+  rootvnode: 0x02136e90,     // BSS, init fills it
+  sysent: 0x01102b70,        // 0x30-byte entries
+  sysent_11: 0x01102d80,     // the entry the bootstrap rewrites (nargs 2)
+  sysent_661: 0x0110a760,    // sysent + 661 * 0x30 (nargs 4)
+  xfast_syscall: 0x000001c0, // kbase = LSTAR - xfast_syscall
+  link_base: 0xffffffff82200000,
+
+  kpatch_sites: Object.freeze([
+    [0x0000acd, "eb",       "bcopy"],
+    [0x02bd79d, "eb",       "bzero"],
+    [0x02bd7e1, "eb",       "pagezero"],
+    [0x02bd85d, "eb",       "memcpy"],
+    [0x02bd8a1, "eb",       "pagecopy"],
+    [0x02bda4d, "eb",       "copyin"],
+    [0x02bdefd, "eb",       "copyinstr"],
+    [0x02bdfcd, "eb",       "copystr"],
+    [0x01b7a43, "eb04",     "dlsym, first check"],
+    [0x01b7a53, "eb04",     "dlsym, second check"],
+    [0x01b7a73, "90e9",     "dlsym, nop and jump"],
+    [0x01b7504, "90e9",     "load_prx"],
+    [0x01b7ab8, "90e93c01", "dlsym, open it to every caller"],
+    [0x0628684, "eb00",     "self verification"],
+    [0x062926f, "eb00",     "delayed panic on suspend"],
+  ]),
+
+  bootstrap_sites: Object.freeze([
+    [0x00000490, "dword", 0x00000000],
+    [0x000004b5, "word",  0x000000eb],
+    [0x000004b9, "word",  0x000000eb],
+    [0x000004c2, "byte",  0x000000eb],
+    [0x00000ab4, "word",  0x000026ff],
+    [0x001faeda, "byte",  0x00000037],
+    [0x001faedd, "byte",  0x00000037],
+  ]),
+});
+
+export function kernel1402() {
+  return KERNEL_1402;
+}
+
 export function offsetsFor(uaString) {
   const m = (uaString || "").match(/PlayStation\s+4[\/ ](\d+)\.(\d+)/);
   if (!m) return { key: null, off: null };
@@ -644,11 +734,3 @@ export function offsetsFor(uaString) {
   const key = m[1] + "." + parseInt(m[2], 16).toString(16).padStart(2, "0");
   return { key, off: PS4[key] || null };
 }
-
-PS4["14.02"] = Object.assign({}, PS4["14.00"], {
-  fw_status:
-    "state=14.02 " +
-    "webkit=assumed-13.52-identical " +
-    "kernel=afterglow-1402 (apm-UAF, offsets from 14.00 + shiftfit) " +
-    "payload=hen.bin|goldhen.bin",
-});
