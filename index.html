@@ -7,8 +7,8 @@
   <title>Sploithen</title>
   <script>
     // Skip the splash screen and enter the exploit page directly.
-    // binloader=true is included as requested; payload selects the receiver.
-    location.replace("launch.html?v=1402s&log=1&afterglow=run&mode=kpstep&g=drain:16&g=drainsz:0x4000&binloader=true&payload=binloader.bin");
+    // Select binloader; afterglow loads it at the payload stage automatically.
+    location.replace("launch.html?v=1402s&log=1&afterglow=run&mode=kpstep&g=drain:16&g=drainsz:0x4000&binloader=1");
   </script>
 </head>
 <body></body>

@@ -1525,7 +1525,14 @@ async function attempt(ctx, opts) {
      thread starts. Payloads that pass also get a loader-side GOT pre-fill
      (dlsym-resolved import slots) so a bootstrap failure can no longer
      kill the browser. Default target = hen-1402.bin. */
-  const payloadName = (ctx.params && ctx.params.get("payload")) || "hen-1402.bin";
+  // Select the receiver automatically when binloader=1 is present.
+  // This selection happens after the kernel stage and patch application,
+  // immediately before the existing payload loader runs.
+  const wantsBinloader = !!(ctx.params && ctx.params.get("binloader") === "1");
+  const requestedPayload = ctx.params && ctx.params.get("payload");
+  const payloadName = wantsBinloader
+    ? "binloader.bin"
+    : (requestedPayload || "hen-1402.bin");
   say("[p] Attempting to load " + payloadName + " (pre-flight decides)");
   if (payloadName === "hen.bin") {
     say("[p] NOTE: hen.bin is the 14.02 ps4-hen rebuild (same bytes as");
