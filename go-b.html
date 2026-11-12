@@ -5,6 +5,6 @@
 /* One-click binloader entry: same chain, payload = binloader.bin.
    The stub listens on TCP 9020; send payloads with:
      nc -q0 <PS4-IP> 9020 < hen.bin */
-location.replace('launch.html?v=1402s&log=1&afterglow=run&mode=kpstep&g=drain:16&g=drainsz:0x4000&payload=binloader.bin');
+location.replace('launch.html?v=1402s&log=1&afterglow=run&mode=kpstep&g=drain:16&g=drainsz:0x4000&binloader=true&payload=binloader.bin');
 </script>
 <p>v=1402s binloader, step stack in padding - redirecting...</p>
