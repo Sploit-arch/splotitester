@@ -1,0 +1,2 @@
+[21:30:20] [p] test beacon line
+[21:30:20] [bld] probe
