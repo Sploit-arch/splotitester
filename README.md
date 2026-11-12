@@ -75,7 +75,7 @@ Open the **Admin panel** URL in any browser on your PC. From there you can:
 | `core.js` / `mem.js` | Exploit primitives |
 | `int64.js` | 64-bit integer helpers |
 | `ps4_offsets.js` | Firmware 14.00/14.02 kernel offsets |
-| `hen.bin` | ps4-hen (patched — wrong `sceSblPfsSetKeys` fixed for 14.00) |
+| `hen.bin` | ps4-hen (patched — wrong `sceSblPfsSetKeys` fixed for 14.00); automatically sent after the binloader listener probe succeeds |
 | `goldhen.bin` | GoldHEN |
 | `patchset.bin` | Kernel patches GoldHEN expects |
 | `kernel_1402.bin` | 14.02-specific kernel payload |

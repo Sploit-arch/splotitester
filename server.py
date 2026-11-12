@@ -5,7 +5,7 @@ NanospeedGamer -- PS4 14.00/14.02 exploit host
   Admin panel   : http://<ip>:<port>/admin?ak=<admin_key>
 """
 
-import sys, os, json, secrets, socket
+import sys, os, json, secrets, socket, time
 from datetime import datetime, timezone
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -323,6 +323,44 @@ class Handler(SimpleHTTPRequestHandler):
             if not self._admin_ok():
                 self._json({"error": "Unauthorized"}, 403); return
             self._json({"keys": _keys})
+            return
+
+        # ── second stage: send hen.bin to the console's binloader ──────────
+        # Called by the PS4 browser only after the local TCP 9020 probe succeeds.
+        if route == "/load-hen":
+            if not self._key_ok():
+                self._send_bytes(403, "text/plain; charset=utf-8", b"Unauthorized")
+                return
+            client_ip = self.client_address[0]
+            hen_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hen.bin")
+            try:
+                with open(hen_path, "rb") as f:
+                    hen_blob = f.read()
+                if len(hen_blob) < 16 or hen_blob[0] != 0xE9:
+                    raise ValueError("hen.bin is not a valid raw payload (expected E9 entry)")
+                last_error = None
+                for attempt in range(1, 7):
+                    try:
+                        with socket.create_connection((client_ip, 9020), timeout=3.0) as conn:
+                            conn.settimeout(10.0)
+                            conn.sendall(hen_blob)
+                            try:
+                                conn.shutdown(socket.SHUT_WR)
+                            except OSError:
+                                pass
+                        msg = ("HEN bytes sent: %d to %s:9020 (attempt %d)"
+                               % (len(hen_blob), client_ip, attempt))
+                        print("[STAGE2] " + msg)
+                        self._send_bytes(200, "text/plain; charset=utf-8", msg.encode())
+                        return
+                    except OSError as exc:
+                        last_error = exc
+                        time.sleep(0.5)
+                raise OSError("could not deliver HEN to %s:9020: %s" % (client_ip, last_error))
+            except Exception as exc:
+                msg = "HEN delivery failed: %s" % exc
+                print("[STAGE2] " + msg)
+                self._send_bytes(502, "text/plain; charset=utf-8", msg.encode())
             return
 
         # ── afterglow console beacons — capture to ag_log.txt ───────────────

