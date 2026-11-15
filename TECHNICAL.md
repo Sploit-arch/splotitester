@@ -32,16 +32,23 @@ carry the exploit at all; `runAfterglow()` is the live chain.
 
 ## Which loader, decided by content
 
-There are two forms of enabler image, and from the outside they look alike:
+There are three forms of enabler image, and from the outside they look alike:
 
 | Form | How it is recognised | Path taken |
 |---|---|---|
-| raw payload | begins with `e9` (jmp rel32) | map it, start a thread |
 | composite image | exactly 964,440 bytes | patch chain, trampoline, padding RW |
+| GoldHEN loader image | jmp at 0, zlib header at `0x6800`, stream length at `0x4706C` | map at `0x926200000`, enter in ring 0; **any file length** |
+| raw payload | begins with `e9` (jmp rel32) | map it, start a thread; any length |
 
 `loadEnabler` in `afterglow.js` decides on the content, **not** on the file
 name. Deciding by name sends a raw payload down the composite path, where the
 length check rejects it.
+
+The loader image carries no length gate: its gate stub, trampoline and ring-3
+probe are written into the page directly after the image, which never starts
+below `0x48000` (the loader's own GOT writes reach offset `0x479C0` whatever
+the file totals). `?loader=1` forces the loader path for an image whose
+interior layout differs; `?loader=0` keeps such a file on the raw path.
 
 ## The kernel patch set
 

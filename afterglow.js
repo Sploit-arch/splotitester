@@ -1210,9 +1210,14 @@ async function runPatchSet(room) {
   return true;
 }
 
+/* Only the base is fixed: the image addresses its own data absolutely and is
+   mapped at that address or not at all. Its length is whatever the bytes say
+   it is. The gate stub, the trampoline and the ring-3 probe live in the page
+   directly after the image, so every image gets a free page of its own no
+   matter how many bytes it carries. */
 const GHL = {
-  base: 0x926200000, size: 291808,
-  tor: 0x47c00, tram: 0x47c40, sentinel: 0x5758,
+  base: 0x926200000, sentinel: 0x5758,
+  tramOff: 0x40, probeOff: 0x200,
 };
 
 async function loadGoldhenLoader(url, k, kbase, preloaded) {
@@ -1220,36 +1225,42 @@ async function loadGoldhenLoader(url, k, kbase, preloaded) {
   let blob = preloaded || null;
   if (blob === null) blob = await fetchBytes(url, "g");
   if (blob === null) return false;
-  if (blob.length !== GHL.size) {
-    say("[g] " + blob.length + " bytes, expected the loader image's " + GHL.size);
+  if (blob.length < 0x100) {
+    say("[g] " + blob.length + " bytes -- too short to be a loader image");
     return false;
   }
   if (blob[0] !== 0xe9) { say("[g] no entry jmp at 0 -- not the loader image"); return false; }
 
   const size = (blob.length + 0xfff) & ~0xfff;
+  /* the page after the image carries the gate stub, the trampoline and the
+     ring-3 probe; the image itself is never written over, whatever its
+     length. It never starts below 0x48000: the loader's own GOT writes run
+     up to offset 0x479C0 regardless of the file's length, so the stubs must
+     sit above that span. */
+  const tor = Math.max(size, 0x48000), tram = tor + GHL.tramOff, probe = tor + GHL.probeOff;
   const lo32 = GHL.base % 0x100000000, hi32 = Math.floor(GHL.base / 0x100000000);
   const base = v(lo32, hi32);
   /* a hint, not MAP_FIXED: if 0x926200000 is already taken the mmap moves
      instead of unmapping what is there, and the check below catches it */
-  const m = sc(S.mmap, base, size + 0x1000, 3, 0x1002, -1, 0);
+  const m = sc(S.mmap, base, tor + 0x1000, 3, 0x1002, -1, 0);
   if (m.i32 === -1) { say("[g] mmap failed, errno " + c.errno()); return false; }
   if ((m.lo >>> 0) !== lo32 || (m.hi >>> 0) !== hi32) {
     say("[g] mmap came back at " + text(v(m.lo, m.hi)) + ", not 0x" + GHL.base.toString(16)
         + " -- the loader addresses its own data absolutely, refusing");
     return false;
   }
-  for (let o = 0; o <= size; o += 0x1000) wr4(plus(base, o), 0);
-  if (sc(S.mprotect, base, size + 0x1000, 7).i32 !== 0) {
+  for (let o = 0; o <= tor; o += 0x1000) wr4(plus(base, o), 0);
+  if (sc(S.mprotect, base, tor + 0x1000, 7).i32 !== 0) {
     say("[g] mprotect rwx failed, errno " + c.errno()); return false;
   }
 
   /* the userland side of the gate, exactly as the composite path uses it */
-  codeAt(base, GHL.tor).hex("4831c0").hex("4989ca").hex("0f05").hex("c3");
+  codeAt(base, tor).hex("4831c0").hex("4989ca").hex("0f05").hex("c3");
 
   /* ring 3 probe before ring 0 is sent in there: a plain ret, so a page
      without X kills this process and not the console */
-  codeAt(base, GHL.tram + 0x200).hex("c3");
-  const r3 = c.callAddr(plus(base, GHL.tram + 0x200), []);
+  codeAt(base, probe).hex("c3");
+  const r3 = c.callAddr(plus(base, probe), []);
   if (r3 === undefined || r3 === null) {
     say("[g] the mapping does not execute -- stopping");
     return false;
@@ -1282,19 +1293,19 @@ async function loadGoldhenLoader(url, k, kbase, preloaded) {
   }
   say("[g] " + blob.length + " bytes at 0x" + GHL.base.toString(16));
 
-  const tram = { n: 0 };
-  const b1 = function (x) { wr1(plus(base, GHL.tram + tram.n), x); tram.n++; };
+  const stub = { n: 0 };
+  const b1 = function (x) { wr1(plus(base, tram + stub.n), x); stub.n++; };
   const hex = function (h) { const u = unhex(h); for (let i = 0; i < u.length; i++) b1(u[i]); };
   const i32 = function (n) { for (let k = 0; k < 4; k++) b1(Math.floor(n / Math.pow(256, k)) % 256); };
   const q64 = function (q) { i32(q.low >>> 0); i32(q.hi >>> 0); };
 
-  tram.n = 0;
+  stub.n = 0;
   hex("48bf"); q64(kbase);        /* rdi = kernel base: any kernel pointer passes the entry check */
   hex("48b8"); q64(base);         /* rax = the loader's first byte, a jump to its entry */
   hex("ffd0");                    /* call rax */
   hex("b8"); i32(GHL.sentinel);   /* mov eax, sentinel */
   hex("c3");
-  const rr = c.callAddr(plus(base, GHL.tor), [11, plus(base, GHL.tram)]);
+  const rr = c.callAddr(plus(base, tor), [11, plus(base, tram)]);
   const rl = rr && (rr.lo >>> 0);
   if (rl !== GHL.sentinel) {
     say("[g] the loader call returned " + (rr ? "0x" + rl.toString(16) : "nothing")
@@ -1305,28 +1316,45 @@ async function loadGoldhenLoader(url, k, kbase, preloaded) {
   return true;
 }
 
-/* Which loader runs is decided by the CONTENT, not by the file name. There
-   are two forms and they look alike from outside:
+/* Which loader runs is decided by the CONTENT, not by the file name or the
+   file length. Three forms look alike from outside:
+     - loader image: a jmp at 0, a zlib stream at 0x6800 and its stream length
+       at 0x4706C. Any total length is accepted; the gate page goes after the
+       image wherever it ends.
      - composite image: stub area plus payload at 0x50000, exactly
        nlOff+nlLen bytes. Needs the patch chain, the trampoline and the
        padding RW.
      - raw payload: begins with `e9` (jmp rel32), like hen.bin. Mapped and
-       started as a thread.
-   A GoldHEN loader is the second form; going by its name it would have taken
-   the composite path and been rejected by the length check. */
+       started as a thread at any length.
+   The composite is checked first because its exact length is unique; the
+   loader is then recognised by fields inside the image, never by how many
+   bytes the file totals. A raw payload shares the leading jmp and nothing
+   else. ?loader=1 forces the loader path for an image with a different
+   internal layout, ?loader=0 keeps such a file on the raw-payload path. */
+function goldhenLoaderImage(blob) {
+  if (!blob || blob.length < 0x47760 || blob[0] !== 0xe9) return false;
+  if (blob[0x6800] !== 0x78) return false;
+  const w = blob[0x4706c] | (blob[0x4706d] << 8)
+          | (blob[0x4706e] << 16) | (blob[0x4706f] << 24);
+  return w > 0 && w <= 0x4086c;
+}
+
 async function loadEnabler(url, k, kbase, room) {
   const blob = await fetchBytes(url, "e");
   if (blob === null) return false;
-  if (blob.length === GHL.size) {
+  const force = STATE.ctx && STATE.ctx.params && STATE.ctx.params.get("loader");
+  /* composite first: its exact length is a sharper test than the loader's
+     interior fields, so it cannot be mistaken for one */
+  if (force !== "1" && blob.length === GH.nlOff + GH.nlLen) {
+    say("[e] " + blob.length + " bytes -- composite image, patch chain path");
+    return loadGoldhen(url, k, kbase, room, blob);
+  }
+  if (force === "1" || (force !== "0" && goldhenLoaderImage(blob))) {
     say("[e] " + blob.length + " bytes -- GoldHEN loader image, entered in ring 0 at its base");
     /* No host patch set here. This image's kpayload installs its own kernel
        patches and custom syscalls. On 14.02 the host set's 0x125xxx block is
        unverified, and writing it blind is what killed the last run. */
     return loadGoldhenLoader(url, k, kbase, blob);
-  }
-  if (blob.length === GH.nlOff + GH.nlLen) {
-    say("[e] " + blob.length + " bytes -- composite image, patch chain path");
-    return loadGoldhen(url, k, kbase, room, blob);
   }
   if (blob.length && blob[0] === 0xe9) {
     say("[e] " + blob.length + " bytes, leading jmp -- raw payload path");
@@ -1334,8 +1362,9 @@ async function loadEnabler(url, k, kbase, room) {
     if (!(await runPatchSet(room))) return false;
     return loadPayload(url, blob);
   }
-  say("[e] " + blob.length + " bytes: neither the composite image ("
-      + (GH.nlOff + GH.nlLen) + ") nor a raw payload (leading jmp) -- refusing");
+  say("[e] " + blob.length + " bytes: neither a GoldHEN loader image nor a"
+      + " composite image (" + (GH.nlOff + GH.nlLen) + ") nor a raw payload"
+      + " (leading jmp) -- refusing");
   return false;
 }
 

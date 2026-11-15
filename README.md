@@ -132,3 +132,10 @@ automatically navigates to `jb.html?log=1&afterglow=run&mode=goldhen`. This sele
 the bundled `goldhen.bin` path in the original exploit loader. The run page keeps
 the original exploit progress log and has a dark blue theme. On desktop browsers,
 the landing page stays visible and explains that the PS4 browser is required.
+
+`goldhen.bin` may be any length. The run page identifies a GoldHEN loader image
+by its interior fields (`jmp` at 0, zlib stream at `0x6800`, stream length at
+`0x4706C`), maps it at `0x926200000` and enters it in ring 0; the gate stub and
+trampoline are written into the page after the image. `?loader=1` forces that
+path, `?loader=0` keeps a file on the raw-payload path. After swapping the
+payload, rerun `./make-manifest.sh` so the offline cache picks it up.
