@@ -16,7 +16,7 @@ The browser host does not reach the kernel by itself. It runs in two stages:
    |---|---|
    | `sc(num, ...args)` | syscall with an arbitrary number, returns `{lo, hi, i32}` |
    | `bufAddr(arrayBuffer)` | address of a backing store |
-   | `p.read1/4/8`, `p.write1/4/8`, `p.readInto` | memory in this process |
+   | `p.read1/4/8`, `p.write1/4/8` | memory in this process |
    | `keepAlive` | an array, so buffers survive the collector |
 
 2. **`afterglow.js`** — the kernel exploit, which uses nothing else. There is
@@ -43,6 +43,15 @@ There are two forms of enabler image, and from the outside they look alike:
 name. Deciding by name sends a raw payload down the composite path, where the
 length check rejects it.
 
+The SploitHEN loader image (292,704 bytes) is the exception to the patch set.
+It runs through the raw payload path like `hen.bin`: mmap anywhere, copy,
+`pthread_create`. Its entry stub sits at image offset 0, so the image finds its
+own base at run time and every internal reference is that base plus a
+constant; the entry bootstrap enters ring 0 through the syscall 11 gate. Its
+kpayload installs the kernel patches and custom syscalls itself, so the host
+set is not run for it — on 14.02 that set's `0x125xxx` block is unverified, and
+writing it blind is what killed the `1402zk` run.
+
 ## The kernel patch set
 
 GoldHEN expects to find a patched kernel. The blob writes **57** kernel text
@@ -51,8 +60,8 @@ its `PATCHES` table and ten more written by its bootstrap stub. The remaining
 **32** are exactly the ones GoldHEN's code looks for: one block of 29 from
 `0x125791` to `0x125871`, plus `0x2fcb5c`, `0x391fc6` and `0x3be3c0`.
 
-That set is position independent and ends in `ret`, and it runs before
-**every** GoldHEN payload, in both image forms. It writes fixed kernel
+That set is position independent and ends in `ret`, and it runs before the
+composite image and before an ordinary raw payload. It writes fixed kernel
 addresses, so there is one per firmware — `patchset-1400.bin` (641 bytes) and
 `patchset-1352.bin` (632 bytes) — and `afterglow.js` fetches the one that
 matches the firmware it was given.

