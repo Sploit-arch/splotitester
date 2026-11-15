@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>SploitGoldHEN 14.02</title>
+    <title>SploitHEN 14.02</title>
     <!-- This page carries its own styles and starts its own module, and it
          loads NOTHING else. That duplicates a little of style.css, and it is
          deliberate: every subresource is one more allocation and one more
@@ -176,9 +176,56 @@
       code {
         color: #9fb3d0;
       }
+
+
+
+
+/* Animated PS3 XMB-inspired background */
+html, body { background: #050713; }
+body {
+  position: relative;
+  isolation: isolate;
+  background: transparent !important;
+}
+body::before, body::after {
+  content: "";
+  position: fixed;
+  inset: -3%;
+  z-index: 0;
+  pointer-events: none;
+  display: block;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  will-change: transform;
+}
+body::before {
+  background-image:
+    linear-gradient(180deg, rgba(5,7,19,.08), rgba(5,7,19,.24)),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 700'%3E%3Cg fill='none' stroke-linecap='round'%3E%3Cpath d='M-80 410 C170 250 330 230 560 350 S980 540 1240 380 S1510 280 1690 390' stroke='%231764bd' stroke-width='2.5' opacity='.8'/%3E%3Cpath d='M-100 470 C160 330 330 300 570 405 S960 570 1220 430 S1510 340 1700 455' stroke='%236246d8' stroke-width='2.5' opacity='.72'/%3E%3Cpath d='M-80 520 C180 390 370 365 610 465 S990 620 1270 490 S1510 410 1700 520' stroke='%23247bd5' stroke-width='2' opacity='.65'/%3E%3Cpath d='M-80 360 C160 210 390 190 620 310 S990 470 1260 330 S1510 250 1700 350' stroke='%23294f9f' stroke-width='2' opacity='.6'/%3E%3C/g%3E%3C/svg%3E");
+  opacity: .95;
+  animation: xmb-drift-a 14s ease-in-out infinite alternate;
+}
+body::after {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 700'%3E%3Cg fill='none' stroke-linecap='round'%3E%3Cpath d='M-100 440 C150 300 360 280 590 390 S960 560 1210 420 S1500 320 1700 440' stroke='%23285fc1' stroke-width='3' opacity='.52'/%3E%3Cpath d='M-100 500 C170 365 370 350 600 450 S970 600 1240 470 S1500 390 1700 500' stroke='%237651d9' stroke-width='2.5' opacity='.5'/%3E%3C/g%3E%3C/svg%3E");
+  opacity: .9;
+  animation: xmb-drift-b 19s ease-in-out infinite alternate;
+}
+body > * { position: relative; z-index: 1; }
+@keyframes xmb-drift-a {
+  from { transform: translate3d(-2.2%, 1%, 0) scale(1.02); }
+  to   { transform: translate3d(2.2%, -1.5%, 0) scale(1.07); }
+}
+@keyframes xmb-drift-b {
+  from { transform: translate3d(2%, -1%, 0) scale(1.04); }
+  to   { transform: translate3d(-2%, 1.5%, 0) scale(1.08); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body::before, body::after { animation: none; }
+}
+
     </style>
     <script>
-/* SploitGoldHEN deterrent: blocks common browser shortcuts and context menus.
+/* SploitHEN deterrent: blocks common browser shortcuts and context menus.
    This is not a security boundary; browser DevTools and source files remain accessible. */
 (function () {
   "use strict";
@@ -207,7 +254,7 @@
     <!-- jb.js owns the body class: .log while the step log is shown, .done or
          .fail once the chain has settled. The ids below are its contract --
          #ramBox, #msg, #state and #out are read by name. -->
-    <div id="brand"><b>SPLOITGOLDHEN <span>14.02</span></b></div>
+    <div id="brand"><b>SPLOITHEN <span>14.02</span></b></div>
     <div id="ramBox">RAM: checking...</div>
     <div id="spin"></div>
     <div id="msg">Restart your console</div>
@@ -215,7 +262,7 @@
       <div id="state"></div>
       <div id="out"></div>
     </div>
-    <p class="byline">SPLOITGOLDHEN 14.02 · ITS SPLOITED</p>
+    <p class="byline">Made by ItsSploited</p>
     <script type="module">
       import "./jb.js";
     </script>
