@@ -1,6 +1,6 @@
 /*
- * SploitHEN 14.02
- * The landing page always routes to the bundled SploitHEN loader.
+ * SploitGoldHEN 14.02
+ * The landing page always routes to the bundled GoldHEN loader.
  * jb.js requires this same-origin index.html referrer as an intentional
  * launch guard, so keep this navigation rather than linking directly to jb.html.
  */
@@ -22,6 +22,6 @@
   if (/PlayStation 4/i.test(navigator.userAgent || "")) {
     window.setTimeout(launchGoldHEN, 900);
   } else if (status) {
-    status.textContent = "Open this host in the PS4 browser to launch SploitHEN.";
+    status.textContent = "Open this host in the PS4 browser to launch GoldHEN.";
   }
 })();

