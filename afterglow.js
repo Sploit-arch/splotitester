@@ -1246,6 +1246,25 @@ async function loadEnabler(url, k, kbase, room) {
    Must come after the handles are defused: the enabler can restart SceShellUI,
    and if this process is torn down with the handles still live, that is the
    hang. */
+
+/* SploitHEN's loader stamps the stage it reached into its own image (word at
+   0x48c40, argument at 0x48c44) and posts the same number as a notification.
+   Reading the word here names the last thing the payload did -- a thread that
+   starts and then returns leaves no other trace. */
+const SH_STAGE = 0x48c40, SH_ARG = 0x48c44;
+async function readStages(c, entry) {
+  let last = -1;
+  for (let i = 0; i < 10; i++) {
+    await new Promise(function (ok) { setTimeout(ok, 400); });
+    let s = 0;
+    try { s = c.p.read8(plus(entry, SH_STAGE)).low >>> 0; } catch (e) { return; }
+    if (s === last) continue;
+    last = s;
+    let a = 0;
+    try { a = c.p.read8(plus(entry, SH_ARG)).low >>> 0; } catch (e) {}
+    say("[p] loader stage " + s + " arg 0x" + a.toString(16));
+  }
+}
 async function loadPayload(url, preloaded) {
   const c = host();
   let blob = preloaded || null;
@@ -1314,6 +1333,7 @@ async function loadPayload(url, preloaded) {
   const started = rc === 0 && (handle.hi >>> 0) > 0;
   say("[p] " + blob.length + " bytes at " + text(entry) + ", thread rc=" + rc
       + (started ? " -- running" : " -- did NOT start"));
+  if (started) await readStages(c, entry);
   return started;
 }
 
