@@ -63,6 +63,13 @@ failures, `0xd0` already loaded). The page polls it for 1500 ms and prints
 `loader stage N`; from stage 4 on the same numbers go to klog as
 `[SH] stage N arg …`.
 
+`goldhen.bin` in this build is the **no-kpayload probe**: the trailer's first
+word at image `0x4706c` (the compressed size) is zero, and
+`load_and_start_kpayload()` returns on that word before any allocation, inflate
+or entry call. It covers stages 1–6 — ring 0, firmware, installer patch, banner
+— and stops. The untouched image sits beside it as `goldhen-full.bin`; open
+`index.html?payload=goldhen-full.bin` to run that one on a later boot.
+
 ## The kernel patch set
 
 GoldHEN expects to find a patched kernel. The blob writes **57** kernel text

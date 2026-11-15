@@ -9,12 +9,17 @@
   var status = document.getElementById("launch-status");
   var started = false;
 
+  /* index.html?payload=goldhen-full.bin reaches the run page with that name,
+     without typing a jb.html URL that the referrer guard would reject. */
+  var m = /[?&]payload=([A-Za-z0-9._-]+)/.exec(window.location.search || "");
+  var extra = m ? "&payload=" + m[1] : "";
+
   function launchGoldHEN() {
     if (started) return;
     started = true;
     if (status) status.textContent = "Launching the 14.02 exploit chain...";
     window.location.replace(
-      "jb.html?log=1&afterglow=run&mode=goldhen"
+      "jb.html?log=1&afterglow=run&mode=goldhen" + extra
     );
   }
 
