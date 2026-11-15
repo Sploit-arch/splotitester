@@ -65,6 +65,18 @@
       }
       /* Running: a spinner under the bar. jb.js switches the body to .done,
          .fail or .log. */
+      /* The next-run URLs, printed by jb.js from this page's own address.
+         Kept in the flow so they stay visible in log mode and behind the
+         system memory dialog. */
+      #next {
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--line);
+        background: #05101f;
+        color: var(--warn);
+        font: 12px/1.5 var(--mono);
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
       #spin {
         position: fixed;
         top: calc(50% + 20px);
@@ -256,6 +268,7 @@ body > * { position: relative; z-index: 1; }
          #ramBox, #msg, #state and #out are read by name. -->
     <div id="brand"><b>SPLOITHEN <span>14.02</span></b></div>
     <div id="ramBox">RAM: checking...</div>
+    <div id="next"></div>
     <div id="spin"></div>
     <div id="msg">Restart your console</div>
     <div id="wrap">

@@ -2467,7 +2467,9 @@ async function attempt(ctx, opts) {
 
   const want = (ctx.params && ctx.params.get("payload"));
   const mode = (ctx.params && ctx.params.get("mode")) || "";
-  if (want !== "") {
+  /* "0" and "none" mean the same thing the host's own pages mean by
+     payload=0: run the kernel stage, start no payload. */
+  if (want !== "" && want !== "0" && want !== "none") {
     iface.payload = (mode === "goldhen")
       ? await loadEnabler(want || "goldhen.bin", k, kbase, hostFree, ctx.fw)
       : await loadPayload(want || "hen.bin");

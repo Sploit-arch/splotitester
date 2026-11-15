@@ -70,6 +70,11 @@ or entry call. It covers stages 1–6 — ring 0, firmware, installer patch, ban
 — and stops. The untouched image sits beside it as `goldhen-full.bin`; open
 `index.html?payload=goldhen-full.bin` to run that one on a later boot.
 
+The run page prints both next-boot URLs from its own address, so they never
+have to be assembled by hand: `?payload=0` for an afterglow-only baseline and
+`?payload=goldhen-full.bin` for the complete image. `payload=0` now skips the
+payload in afterglow itself, not just in the host's preflight.
+
 ## The kernel patch set
 
 GoldHEN expects to find a patched kernel. The blob writes **57** kernel text

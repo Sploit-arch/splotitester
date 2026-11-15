@@ -231,6 +231,32 @@ if (ramBox) {
   );
 }
 
+/* The URLs the next cold boot can need, built from wherever this page is
+   served -- Pages, LAN, anything -- so they never have to be assembled by
+   hand on a console. */
+const nextBox =
+  document.getElementById("next");
+
+if (nextBox) {
+  let pageBase;
+
+  try {
+    pageBase =
+      new URL("index.html", location.href).href;
+  } catch (e) {
+    pageBase = "index.html";
+  }
+
+  const ranFile =
+    params.get("payload") || "goldhen.bin";
+
+  nextBox.textContent =
+    "this run: " + ranFile +
+    (ranFile === "goldhen.bin" ? " (probe, stops at stage 6)" : "") + "\n" +
+    "cold boot, error again -> " + pageBase + "?payload=0\n" +
+    "cold boot, error gone  -> " + pageBase + "?payload=goldhen-full.bin";
+}
+
 /* Not when the page is on its way home: log mode hides #msg, which is
    where that notice sits. */
 if (SHOW_LOG && !SENT_HOME && document.body) document.body.className = "log";
