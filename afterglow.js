@@ -28,6 +28,7 @@
       bufAddr(arrayBuffer)  int64 address of the backing store
       p.read1/4/8           read in this process
       p.write1/4/8          write in this process
+      p.readInto(u8, at, n)
       keepAlive             array, so our buffers survive the collector
       mark(tag, detail)     log
     A way to call native code is NOT needed.
@@ -1218,24 +1219,9 @@ async function runPatchSet(room) {
        started as a thread.
    A GoldHEN loader is the second form; going by its name it would have taken
    the composite path and been rejected by the length check. */
-async function loadEnabler(url, k, kbase, room, fw) {
+async function loadEnabler(url, k, kbase, room) {
   const blob = await fetchBytes(url, "e");
   if (blob === null) return false;
-  if (blob.length === GHL.size) {
-    say("[e] " + blob.length + " bytes -- GoldHEN loader image, raw payload path");
-    /* No host patch set here. This image's kpayload installs its own kernel
-       patches and custom syscalls. On 14.02 the host set's 0x125xxx block is
-       unverified, and writing it blind is what killed the last run. */
-    /* The loader's entry enters ring 0 through sysent[11], so the door is
-       checked before a thread is sent through it. */
-    const door = k.read_v(plus(kbase, 0x1102d88));
-    if (!door || !same(door, plus(kbase, 0xab4))) {
-      say("[e] sysent[11] is " + (door ? text(door) : "unreadable")
-          + ", not the kexec door at +0xab4 -- the loader would enter nothing");
-      return false;
-    }
-    return loadPayload(url, blob, kbase, fw);
-  }
   if (blob.length === GH.nlOff + GH.nlLen) {
     say("[e] " + blob.length + " bytes -- composite image, patch chain path");
     return loadGoldhen(url, k, kbase, room, blob);
@@ -1260,7 +1246,7 @@ async function loadEnabler(url, k, kbase, room, fw) {
    Must come after the handles are defused: the enabler can restart SceShellUI,
    and if this process is torn down with the handles still live, that is the
    hang. */
-async function loadPayload(url, preloaded, kbase, fw) {
+async function loadPayload(url, preloaded) {
   const c = host();
   let blob = preloaded || null;
   if (blob === null) {
@@ -1281,27 +1267,20 @@ async function loadPayload(url, preloaded, kbase, fw) {
     say("[p] mmap rwx failed, errno " + c.errno()); return false;
   }
 
-  /* One address object and one value object, mutated in place: this copy is
-     a quarter of a megabyte and a fresh int64 per quadword left the page
-     with a million cells to collect right after the install. */
-  const cur = v(entry.low, entry.hi);
-  const word = v(0, 0);
   for (let o = 0; o < blob.length; o += 8) {
     let lo = 0, hi = 0;
     for (let k = 0; k < 4; k++) lo |= (blob[o + k] || 0) << (8 * k);
     for (let k = 0; k < 4; k++) hi |= (blob[o + 4 + k] || 0) << (8 * k);
-    word.low = lo >>> 0; word.hi = hi >>> 0;
-    c.p.write8(cur, word);
-    cur.add32inplace(8);
+    c.p.write8(plus(entry, o), v(lo >>> 0, hi >>> 0));
   }
-  const back = v(entry.low, entry.hi);
-  for (let o = 0; o < blob.length; o += 4) {
-    let lo = 0;
+  for (let o = 0; o < blob.length; o += 8) {
+    let lo = 0, hi = 0;
     for (let k = 0; k < 4; k++) lo |= (blob[o + k] || 0) << (8 * k);
-    if (c.p.read4(back) !== (lo >>> 0)) {
+    for (let k = 0; k < 4; k++) hi |= (blob[o + 4 + k] || 0) << (8 * k);
+    const q = c.p.read8(plus(entry, o));
+    if ((q.low >>> 0) !== (lo >>> 0) || (q.hi >>> 0) !== (hi >>> 0)) {
       say("[p] copy mismatch at 0x" + o.toString(16)); return false;
     }
-    back.add32inplace(4);
   }
 
   /* The table blanks both pthread_create fields for 14.00, but only one of
@@ -1330,34 +1309,11 @@ async function loadPayload(url, preloaded, kbase, fw) {
 
   const thr = alloc(8);
   thr.u8.fill(0);
-  /* The host knows the firmware and the kernel base already. They travel in
-     the thread argument, so the loader does not depend on its own kernel
-     string scan to find them. */
-  const fwCode = parseInt(String(fw || "").replace(".", ""), 10) || 0;
-  const info = alloc(16);
-  info.u8.fill(0);
-  if (fwCode) info.dv.setUint32(0, fwCode, true);
-  if (kbase) pokeAt(info, 8, kbase);
-  const rc = c.callAddr(fn, [thr.at, 0, entry, info.at]).i32;
+  const rc = c.callAddr(fn, [thr.at, 0, entry, 0]).i32;
   const handle = qAt(thr, 0);
   const started = rc === 0 && (handle.hi >>> 0) > 0;
   say("[p] " + blob.length + " bytes at " + text(entry) + ", thread rc=" + rc
       + (started ? " -- running" : " -- did NOT start"));
-
-  if (started) {
-    /* Stage word at image + 0x67f0; the trailer's firmware word sits at
-       0x47750. Read-only polling, no allocation while the loader runs. */
-    const progAt = v(entry.low, entry.hi); progAt.add32inplace(0x67f0);
-    const fwAt = v(entry.low, entry.hi); fwAt.add32inplace(0x47750);
-    let prog = 0, n = 0;
-    const t0 = Date.now();
-    while (prog !== 10 && prog < 0xc0) {
-      prog = c.p.read4(progAt) >>> 0;
-      if ((++n & 0x7f) === 0 && Date.now() - t0 >= 1500) break;
-    }
-    say("[p] loader stage " + prog + ", firmware word "
-        + (c.p.read4(fwAt) >>> 0));
-  }
   return started;
 }
 
@@ -1640,25 +1596,6 @@ async function loadGoldhen(url, k, kbase, room, preloaded) {
   say("[g] " + good + " of " + GH_STEPS.length + " calls returned, " + silent + " silent");
   return silent === 0;
 }
-
-/* ------------------------------------------ GoldHEN loader image */
-
-/* The other GoldHEN form this page accepts: the OpenGoldHEN loader. It is a
-   raw payload in the host's sense -- first byte e9, run from a thread at
-   whatever address the mmap chose -- and it carries everything it needs in
-   that one file: the loader, the zlib kpayload and their trailer.
-
-   Nothing in it is tied to a fixed address. Its entry stub is at image
-   offset 0, so the base it is running from is its own address; every
-   internal literal is reached relative to that base, and the entry bootstrap
-   enters ring 0 through the syscall 11 gate before any of it runs.
-
-   No step chain here. The loader finds the kernel itself through rdmsr,
-   patches the installer (it saves and restores CR0.WP around the writes),
-   inflates the kpayload that follows it in the same image, loads that ELF
-   and calls its entry. The kpayload installs its own kernel patches and
-   custom syscalls, so the host's patch set is not run for this form. */
-const GHL = { size: 292704 };
 
 /* ------------------------------------------------- defusing the handles */
 
@@ -2467,11 +2404,9 @@ async function attempt(ctx, opts) {
 
   const want = (ctx.params && ctx.params.get("payload"));
   const mode = (ctx.params && ctx.params.get("mode")) || "";
-  /* "0" and "none" mean the same thing the host's own pages mean by
-     payload=0: run the kernel stage, start no payload. */
-  if (want !== "" && want !== "0" && want !== "none") {
+  if (want !== "") {
     iface.payload = (mode === "goldhen")
-      ? await loadEnabler(want || "goldhen.bin", k, kbase, hostFree, ctx.fw)
+      ? await loadEnabler(want || "goldhen.bin", k, kbase, hostFree)
       : await loadPayload(want || "hen.bin");
   }
   say("done -- jailbroken, rwx open, syscall 11 is a kexec gate"

@@ -231,32 +231,6 @@ if (ramBox) {
   );
 }
 
-/* The URLs the next cold boot can need, built from wherever this page is
-   served -- Pages, LAN, anything -- so they never have to be assembled by
-   hand on a console. */
-const nextBox =
-  document.getElementById("next");
-
-if (nextBox) {
-  let pageBase;
-
-  try {
-    pageBase =
-      new URL("index.html", location.href).href;
-  } catch (e) {
-    pageBase = "index.html";
-  }
-
-  const ranFile =
-    params.get("payload") || "goldhen.bin";
-
-  nextBox.textContent =
-    "this run: " + ranFile +
-    (ranFile === "goldhen.bin" ? " (probe, stops at stage 6)" : "") + "\n" +
-    "cold boot, error again -> " + pageBase + "?payload=0\n" +
-    "cold boot, error gone  -> " + pageBase + "?payload=goldhen-full.bin";
-}
-
 /* Not when the page is on its way home: log mode hides #msg, which is
    where that notice sits. */
 if (SHOW_LOG && !SENT_HOME && document.body) document.body.className = "log";
@@ -859,7 +833,6 @@ let mainMf = null,
       put(c.pivotDv, off.pivot_view_sp, c.K.add32(at));
     }
     const M = makeCtx();
-    mark("PIVOT-BUILD", "call contexts and stack in place");
     mainMf = p.read8(cell.add32(0x18)).add32(off.wk_JSFunction_m_function);
     mainOrig = p.read8(mainMf);
     const pivotObj = {};
@@ -867,7 +840,6 @@ let mainMf = null,
     const pivotCell = p.leakval(pivotObj);
     p.write8(mainMf, G.G0);
     mainArmed = true;
-    mark("PIVOT-ARMED", "the trigger is swapped in");
     function callAddr(target, args) {
       layout(M, target, args);
       const saved = p.read8(pivotCell);
@@ -952,7 +924,6 @@ let mainMf = null,
           /* set before the call, not after: a throw inside the chain can
              still have fired a shot, and that is the case `ran` is for */
           agRan = true;
-          mark("AG-START", "handing over to the kernel stage");
           agOk = !!(await ag.runAfterglow(agCtx));
         }
       } catch (agError) {
