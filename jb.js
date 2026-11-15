@@ -859,6 +859,7 @@ let mainMf = null,
       put(c.pivotDv, off.pivot_view_sp, c.K.add32(at));
     }
     const M = makeCtx();
+    mark("PIVOT-BUILD", "call contexts and stack in place");
     mainMf = p.read8(cell.add32(0x18)).add32(off.wk_JSFunction_m_function);
     mainOrig = p.read8(mainMf);
     const pivotObj = {};
@@ -866,6 +867,7 @@ let mainMf = null,
     const pivotCell = p.leakval(pivotObj);
     p.write8(mainMf, G.G0);
     mainArmed = true;
+    mark("PIVOT-ARMED", "the trigger is swapped in");
     function callAddr(target, args) {
       layout(M, target, args);
       const saved = p.read8(pivotCell);
@@ -950,6 +952,7 @@ let mainMf = null,
           /* set before the call, not after: a throw inside the chain can
              still have fired a shot, and that is the case `ran` is for */
           agRan = true;
+          mark("AG-START", "handing over to the kernel stage");
           agOk = !!(await ag.runAfterglow(agCtx));
         }
       } catch (agError) {
