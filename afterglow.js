@@ -1255,20 +1255,30 @@ async function loadGoldhenLoader(url, k, kbase, preloaded) {
     return false;
   }
 
+  /* One address object and one value object, mutated in place. A fresh int64
+     per quadword here left ~a million short-lived cells for the collector,
+     which ran right after the install -- after "done", with the payload
+     already in the kernel. */
+  const cur = plus(base, 0);
+  const word = v(0, 0);
   for (let o = 0; o < blob.length; o += 8) {
     let lo = 0, hi = 0;
     for (let k = 0; k < 4; k++) lo |= (blob[o + k] || 0) << (8 * k);
     for (let k = 0; k < 4; k++) hi |= (blob[o + 4 + k] || 0) << (8 * k);
-    c.p.write8(plus(base, o), v(lo >>> 0, hi >>> 0));
+    word.low = lo >>> 0; word.hi = hi >>> 0;
+    c.p.write8(cur, word);
+    cur.add32inplace(8);
   }
-  for (let o = 0; o < blob.length; o += 8) {
-    let lo = 0, hi = 0;
-    for (let k = 0; k < 4; k++) lo |= (blob[o + k] || 0) << (8 * k);
-    for (let k = 0; k < 4; k++) hi |= (blob[o + 4 + k] || 0) << (8 * k);
-    const q = c.p.read8(plus(base, o));
-    if ((q.low >>> 0) !== (lo >>> 0) || (q.hi >>> 0) !== (hi >>> 0)) {
-      say("[g] copy mismatch at 0x" + o.toString(16)); return false;
+  const back = new Uint8Array(0x1000);
+  for (let o = 0; o < blob.length;) {
+    const n = Math.min(back.length, blob.length - o);
+    c.p.readInto(back, plus(base, o), n);
+    for (let i = 0; i < n; i++) {
+      if (back[i] !== blob[o + i]) {
+        say("[g] copy mismatch at 0x" + (o + i).toString(16)); return false;
+      }
     }
+    o += n;
   }
   say("[g] " + blob.length + " bytes at 0x" + GHL.base.toString(16));
 
@@ -1309,6 +1319,9 @@ async function loadEnabler(url, k, kbase, room) {
   if (blob === null) return false;
   if (blob.length === GHL.size) {
     say("[e] " + blob.length + " bytes -- GoldHEN loader image, entered in ring 0 at its base");
+    /* No host patch set here. This image's kpayload installs its own kernel
+       patches and custom syscalls. On 14.02 the host set's 0x125xxx block is
+       unverified, and writing it blind is what killed the last run. */
     return loadGoldhenLoader(url, k, kbase, blob);
   }
   if (blob.length === GH.nlOff + GH.nlLen) {
