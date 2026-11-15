@@ -52,6 +52,17 @@ kpayload installs the kernel patches and custom syscalls itself, so the host
 set is not run for it — on 14.02 that set's `0x125xxx` block is unverified, and
 writing it blind is what killed the `1402zk` run.
 
+The page hands the loader the two values it already knows in the thread
+argument: firmware code and kernel base, `{u32 fw, u32 pad, u64 kbase}`. The
+loader prefers them over its own `s/release_` scan and `rdmsr` base, so a
+scan miss can no longer turn into a silent return. The loader keeps a stage
+word at image + `0x67f0` (`1` entry, `2` argument read, `3` in `goldhen_main`,
+`4` firmware resolved, `5`/`6` installer before/after patching, `7` kpayload
+inflated, `8` ELF loaded, `9` entry called, `10` entry returned; `0xe1`–`0xe4`
+failures, `0xd0` already loaded). The page polls it for 1500 ms and prints
+`loader stage N`; from stage 4 on the same numbers go to klog as
+`[SH] stage N arg …`.
+
 ## The kernel patch set
 
 GoldHEN expects to find a patched kernel. The blob writes **57** kernel text

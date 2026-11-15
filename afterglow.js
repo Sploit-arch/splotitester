@@ -1218,7 +1218,7 @@ async function runPatchSet(room) {
        started as a thread.
    A GoldHEN loader is the second form; going by its name it would have taken
    the composite path and been rejected by the length check. */
-async function loadEnabler(url, k, kbase, room) {
+async function loadEnabler(url, k, kbase, room, fw) {
   const blob = await fetchBytes(url, "e");
   if (blob === null) return false;
   if (blob.length === GHL.size) {
@@ -1234,7 +1234,7 @@ async function loadEnabler(url, k, kbase, room) {
           + ", not the kexec door at +0xab4 -- the loader would enter nothing");
       return false;
     }
-    return loadPayload(url, blob);
+    return loadPayload(url, blob, kbase, fw);
   }
   if (blob.length === GH.nlOff + GH.nlLen) {
     say("[e] " + blob.length + " bytes -- composite image, patch chain path");
@@ -1260,7 +1260,7 @@ async function loadEnabler(url, k, kbase, room) {
    Must come after the handles are defused: the enabler can restart SceShellUI,
    and if this process is torn down with the handles still live, that is the
    hang. */
-async function loadPayload(url, preloaded) {
+async function loadPayload(url, preloaded, kbase, fw) {
   const c = host();
   let blob = preloaded || null;
   if (blob === null) {
@@ -1330,11 +1330,34 @@ async function loadPayload(url, preloaded) {
 
   const thr = alloc(8);
   thr.u8.fill(0);
-  const rc = c.callAddr(fn, [thr.at, 0, entry, 0]).i32;
+  /* The host knows the firmware and the kernel base already. They travel in
+     the thread argument, so the loader does not depend on its own kernel
+     string scan to find them. */
+  const fwCode = parseInt(String(fw || "").replace(".", ""), 10) || 0;
+  const info = alloc(16);
+  info.u8.fill(0);
+  if (fwCode) info.dv.setUint32(0, fwCode, true);
+  if (kbase) pokeAt(info, 8, kbase);
+  const rc = c.callAddr(fn, [thr.at, 0, entry, info.at]).i32;
   const handle = qAt(thr, 0);
   const started = rc === 0 && (handle.hi >>> 0) > 0;
   say("[p] " + blob.length + " bytes at " + text(entry) + ", thread rc=" + rc
       + (started ? " -- running" : " -- did NOT start"));
+
+  if (started) {
+    /* Stage word at image + 0x67f0; the trailer's firmware word sits at
+       0x47750. Read-only polling, no allocation while the loader runs. */
+    const progAt = v(entry.low, entry.hi); progAt.add32inplace(0x67f0);
+    const fwAt = v(entry.low, entry.hi); fwAt.add32inplace(0x47750);
+    let prog = 0, n = 0;
+    const t0 = Date.now();
+    while (prog !== 10 && prog < 0xc0) {
+      prog = c.p.read4(progAt) >>> 0;
+      if ((++n & 0x7f) === 0 && Date.now() - t0 >= 1500) break;
+    }
+    say("[p] loader stage " + prog + ", firmware word "
+        + (c.p.read4(fwAt) >>> 0));
+  }
   return started;
 }
 
@@ -2446,7 +2469,7 @@ async function attempt(ctx, opts) {
   const mode = (ctx.params && ctx.params.get("mode")) || "";
   if (want !== "") {
     iface.payload = (mode === "goldhen")
-      ? await loadEnabler(want || "goldhen.bin", k, kbase, hostFree)
+      ? await loadEnabler(want || "goldhen.bin", k, kbase, hostFree, ctx.fw)
       : await loadPayload(want || "hen.bin");
   }
   say("done -- jailbroken, rwx open, syscall 11 is a kexec gate"
