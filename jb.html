@@ -216,6 +216,80 @@
       <div id="out"></div>
     </div>
     <p class="byline">SPLOITGOLDHEN 14.02 · ITS SPLOITED</p>
+    <script>
+/* runlog bridge - active only with ?runlog=1, so the default chain is byte
+   for byte the page the exploit was tuned on. It loads no subresource: the
+   wrapper is inline, the only network is one beacon at open, then nothing
+   until an error or the page unloads. */
+(function () {
+  "use strict";
+  if (!/[?&]runlog=1/.test(window.location.search)) return;
+
+  var url = "http://192.168.1.75:8020/log";
+  var run = "r" + (+new Date()).toString(36) +
+    Math.floor(Math.random() * 46656).toString(36);
+  var queue = [];
+
+  function push(tag, detail) {
+    detail = detail === undefined || detail === null ? "" : String(detail);
+    if (detail.length > 800) detail = detail.slice(0, 800) + "...";
+    queue.push(tag + "|" + detail);
+  }
+
+  function flush() {
+    while (queue.length) {
+      var body = run + "|" + queue.shift();
+      var sent = false;
+      if (window.navigator && window.navigator.sendBeacon) {
+        try { sent = window.navigator.sendBeacon(url, body); } catch (e) { sent = false; }
+      }
+      if (!sent) {
+        try {
+          var xhr = new XMLHttpRequest();
+          xhr.open("POST", url, false);
+          xhr.send(body);
+        } catch (e) {}
+      }
+    }
+  }
+
+  window.addEventListener("error", function (ev) {
+    push("ERR", (ev.message || "") + " @ " + (ev.filename || "") + ":" +
+      (ev.lineno || 0) + ":" + (ev.colno || 0));
+    flush();
+  });
+
+  window.addEventListener("unhandledrejection", function (ev) {
+    push("REJECT", ev.reason);
+    flush();
+  });
+
+  window.addEventListener("beforeunload", function () {
+    push("PAGE", "unload");
+    flush();
+  });
+
+  if (window.fetch) {
+    var of = window.fetch;
+    window.fetch = function (input) {
+      var target = typeof input === "string" ? input : (input && input.url);
+      push("NET", "> " + target);
+      return of.apply(window, arguments).then(function (res) {
+        push("NET", "< " + res.status + " " + target);
+        return res;
+      }, function (err) {
+        push("NET", "! " + target + " " + err);
+        throw err;
+      });
+    };
+  }
+
+  window.__runlog = { run: run, push: push, flush: flush };
+
+  push("PAGE", "jb open " + window.location.search);
+  flush();
+})();
+    </script>
     <script type="module">
       import "./jb.js";
     </script>

@@ -13,9 +13,9 @@
     if (started) return;
     started = true;
     if (status) status.textContent = "Launching the 14.02 exploit chain...";
-    window.location.replace(
-      "jb.html?log=1&afterglow=run&mode=goldhen"
-    );
+    var q = "jb.html?log=1&afterglow=run&mode=goldhen";
+    if (/[?&]runlog=1/.test(window.location.search)) q += "&runlog=1";
+    window.location.replace(q);
   }
 
   // Let the branded launch screen paint before navigating into the exploit.
